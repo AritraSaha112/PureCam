@@ -12,8 +12,8 @@ android {
         applicationId = "io.github.purecam"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
     }
 
     signingConfigs {
@@ -53,4 +53,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // On-device person segmentation for Portrait mode (bundled model, works offline)
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 }

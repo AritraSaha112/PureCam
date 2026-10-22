@@ -2,41 +2,36 @@
 
 <img src="logo.png" width="120" alt="PureCam logo">
 
-An open-source camera for Android that takes **natural, unprocessed photos**, with no AI "enhancement", over-sharpening or smeared noise reduction. It was built and tuned for the **Samsung Galaxy S21 FE** and works on any Android 10+ phone.
+An open-source camera for Android, built and tuned for the **Samsung Galaxy S21 FE**. It can shoot natural, unprocessed photos, or use processed looks, Portrait blur and 4K video (Standard, Natural or LOG).
 
-## What "Natural mode" turns off (Camera2 API)
+## Modes
 
-| Processing | Setting |
+Swipe the viewfinder sideways or tap the mode names: **VIDEO · PHOTO · PORTRAIT · PRO**
+
+### Photo and Pro: looks (✦ button)
+| Look | What it does |
 |---|---|
-| Noise reduction | `NOISE_REDUCTION_MODE_OFF` (or the lowest mode the lens allows) |
-| Sharpening / edge enhancement | `EDGE_MODE_OFF` |
-| Chromatic-aberration correction | `COLOR_CORRECTION_ABERRATION_MODE_OFF` |
-| Punchy tone curve | Replaced with a plain sRGB curve (`TONEMAP_PRESET_CURVE_SRGB`) |
-| Ultra-wide distortion correction | `DISTORTION_CORRECTION_MODE_OFF` (toggle in settings) |
-| Scene optimiser, multi-frame merging, AI | Not used. PureCam takes a single frame. |
-| Video stabilisation crop | Off (optical stabilisation stays on because it's mechanical) |
+| **Natural** | Phone processing **off**: no noise reduction, sharpening, local tone-mapping or distortion correction. Plain sRGB curve, single frame. |
+| Standard | Phone's full-quality noise reduction and sharpening |
+| Vivid / Rich contrast / Warm / Cool / Film / Mono | Standard processing plus a colour grade, shown **live** in the viewfinder and applied to the saved JPEG |
 
-JPEGs are saved at quality 100. Optional **RAW (DNG)** saves the untouched sensor data next to each JPEG.
+Optional RAW (DNG) keeps the untouched sensor data.
 
-The basic sensor corrections (black level, lens-shading, white balance, demosaic) still run in the phone's hardware image processor, as they do in every camera app. RAW is the only way to skip them.
+### Portrait
+Person-aware background blur (ML Kit selfie segmentation, runs on the phone). The aperture control (ƒ1.4 to ƒ16) sets the blur strength. Works on every lens, and the 3× telephoto gives the most flattering compression. The blur is computed after you take the photo.
 
-## Features
+### Video
+- **4K or 1080p, 30 or 60 fps** (60 fps when the phone offers it to apps), H.264 or HEVC, 48 kHz stereo AAC audio.
+- **Standard**: stabilised, clean, Rec.709. Upload straight to YouTube (4K30 ≈ 50 Mbps H.264).
+- **Natural**: processing and stabilisation crop off.
+- **PureLog**: a flat log curve through the camera's tone-map, which keeps highlight and shadow detail for grading. Apply `luts/PureLog_to_Rec709.cube` in DaVinci Resolve, Premiere or CapCut, then grade.
+- **All lenses with smooth, animated zooms between them, even while recording.** Video uses the phone's multi-camera zoom system, so the phone hands over between the 0.5×, 1× and 3× modules.
 
-- **All lenses**: probes every camera ID, including the ones Samsung hides from the public list, to find ultra-wide (0.5×), main (1×), telephoto (3×) and front. The lens buttons are labelled from the real focal lengths. Settings › "Lenses found" shows exactly what was detected.
-- Pinch to zoom within a lens, tap to focus and meter (the ring turns amber when locked).
-- **Pro mode**: ISO, shutter speed (1/8000 s to 30 s), manual focus, white-balance presets, exposure compensation, and a live ISO/shutter readout.
-- Flash off/auto/on/torch, 3 s and 10 s timer, grid, volume-key shutter, shutter sound toggle.
-- Thumbnail opens the last photo in Samsung Gallery. Photos are saved to `DCIM/PureCam`.
-- S21 FE tuning: 120 Hz viewfinder, full-sensor 4:3 frame, layout around the punch-hole, controls in thumb reach, and icons that rotate when you turn the phone.
+## Lenses (including the 3× telephoto)
+PureCam probes every camera ID, including the ones Samsung hides from the public list. If the telephoto (or ultra-wide) can't be opened directly, PureCam reaches it through the phone's **multi-camera zoom system** (`CONTROL_ZOOM_RATIO` = 3.0), where the phone switches to the real telephoto module itself. Settings › "Lenses found" shows exactly what was detected and which route is used. In Pro mode, the info pill shows the sensor ID that is active right now.
 
 ## Get the APK
-
-Push this folder to a GitHub repo. GitHub Actions builds `PureCam.apk` and publishes it under **Releases › Latest build**.
-
-```bash
-gh repo create PureCam --public --source=. --push
-```
+Push this folder to GitHub. GitHub Actions builds `PureCam.apk` and publishes it under **Releases › Latest build**.
 
 ## Licence
-
 Apache-2.0
