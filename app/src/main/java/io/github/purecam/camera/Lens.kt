@@ -39,7 +39,8 @@ data class Lens(
     val description: String
         get() {
             val how = when {
-                zoomRatio != null -> "via multi-camera zoom on ID $openId"
+                zoomRatio != null && abs(zoomRatio - 1f) < 0.01f -> "ID $openId (zoom route)"
+                zoomRatio != null -> "via ${LensCatalog.format(zoomRatio)}× zoom on ID $openId"
                 physicalId != null -> "ID $openId, sub-camera $physicalId"
                 else -> "ID $openId"
             }
@@ -60,7 +61,7 @@ object LensCatalog {
      */
     fun discover(cm: CameraManager): LensSet {
         val listed = runCatching { cm.cameraIdList.toList() }.getOrDefault(emptyList())
-        val ids = LinkedHashSet(listed).apply { for (i in 0..63) add(i.toString()) }
+        val ids = LinkedHashSet(listed).apply { for (i in 0..127) add(i.toString()) }
         val found = mutableListOf<Candidate>()
 
         for (id in ids) {
@@ -123,6 +124,22 @@ object LensCatalog {
                 .distinctBy { (it * 10).roundToInt() }
                 .sorted()
                 .map { virtual(it) }
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            // No multi-camera group is exposed (Galaxy S21 FE). Ask the main camera itself for 3× / 0.5×:
+            // on many Samsung phones the camera then switches to the real telephoto / ultra-wide module
+            // internally. The app checks the reported focal length at runtime and tells the user
+            // whether the telephoto actually took over or it is digital zoom.
+            val main = back.minByOrNull { abs(it.ratio - 1f) }
+            val r = main?.chars?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            if (main != null && r != null && (r.upper >= 2.5f || r.lower < 0.9f)) {
+                fun viaZoom(z: Float) = main.copy(equivMm = mainEquiv * z, ratio = z, label = format(z), zoomRatio = z, fallback = null)
+                val zoomMain = main.copy(zoomRatio = 1f)
+                val p = back.map { if (it.key == main.key) zoomMain else it }.toMutableList()
+                if (back.none { it.ratio >= 2.5f } && r.upper >= 2.5f) p += viaZoom(min(3f, r.upper))
+                if (back.none { it.ratio < 0.8f } && r.lower < 0.9f) p += viaZoom(r.lower)
+                photoBack = p.sortedBy { it.ratio }
+                videoBack = photoBack
+            }
         }
         return LensSet(photo = photoBack + front, video = videoBack + front)
     }

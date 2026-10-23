@@ -118,6 +118,8 @@ class CamUi {
     var liveIso by mutableIntStateOf(0)
     var liveExposure by mutableLongStateOf(0L)
     var activeSensor by mutableStateOf<String?>(null)
+    /** Focal length (mm) the camera reports for the current frame: tells whether the telephoto module is really in use. */
+    var liveFocal by mutableFloatStateOf(0f)
     var rotation by mutableIntStateOf(0)
 
     // Video
@@ -431,6 +433,9 @@ class CameraEngine(private val app: Context) {
         scope.launch { mutex.withLock { afRegion = null } }
     }
 
+    /** Full text report of every camera the phone exposes, for troubleshooting lens detection. */
+    fun diagnostics(): String = CameraReport.build(app, ui)
+
     fun toast(msg: String) = main.post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
 
     // ------------------------------------------------------------------ open / close
@@ -655,7 +660,8 @@ class CameraEngine(private val app: Context) {
                 val i = lastIso
                 val e = lastExposure
                 val active = res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
-                main.post { ui.liveIso = i; ui.liveExposure = e; ui.activeSensor = active }
+                val focal = res.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f
+                main.post { ui.liveIso = i; ui.liveExposure = e; ui.activeSensor = active; ui.liveFocal = focal }
             }
             if (afRegion != null) {
                 val st = res.get(CaptureResult.CONTROL_AF_STATE)
@@ -1086,7 +1092,7 @@ class CameraEngine(private val app: Context) {
             evRange = if (ev != null) ev.lower..ev.upper else 0..0,
             evStep = ch.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 1f,
             flash = ch.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true,
-            raw = l.physicalId == null && l.zoomRatio == null &&
+            raw = l.physicalId == null && (l.zoomRatio == null || abs(l.zoomRatio - 1f) < 0.01f) &&
                 CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps &&
                 map?.outputFormats?.contains(ImageFormat.RAW_SENSOR) == true,
             awbModes = (ch.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) ?: intArrayOf(CameraMetadata.CONTROL_AWB_MODE_AUTO)).toList(),

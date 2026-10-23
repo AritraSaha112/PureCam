@@ -28,6 +28,8 @@ Person-aware background blur (ML Kit selfie segmentation, runs on the phone). Th
 - **All lenses with smooth, animated zooms between them, even while recording.** Video uses the phone's multi-camera zoom system, so the phone hands over between the 0.5×, 1× and 3× modules.
 
 ## Lenses (including the 3× telephoto)
+**Galaxy S21 FE:** Samsung only exposes the ultra-wide (ID 2), the main (ID 0) and the front cameras to apps. The telephoto isn't listed as its own camera. PureCam 2.1 therefore asks the main camera for 3× zoom. On phones where Samsung switches to the telephoto internally, the viewfinder shows **"TELEPHOTO LENS ✓"**; otherwise it shows **"DIGITAL ZOOM"**, so you always know which one you have. Settings › Camera diagnostics produces a full report of what your phone exposes.
+
 PureCam probes every camera ID, including the ones Samsung hides from the public list. If the telephoto (or ultra-wide) can't be opened directly, PureCam reaches it through the phone's **multi-camera zoom system** (`CONTROL_ZOOM_RATIO` = 3.0), where the phone switches to the real telephoto module itself. Settings › "Lenses found" shows exactly what was detected and which route is used. In Pro mode, the info pill shows the sensor ID that is active right now.
 
 ## Get the APK

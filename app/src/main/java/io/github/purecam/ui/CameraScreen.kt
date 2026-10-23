@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraCharacteristics
 import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -128,6 +129,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private val RecordRed = Color(0xFFFF3B30)
@@ -251,6 +253,16 @@ fun CameraScreen(engine: CameraEngine) {
                 Pill(
                     String.format(Locale.US, "%.1f×", effZoom),
                     Modifier.align(Alignment.TopCenter).padding(top = if (ui.mode.video) topInset + 64.dp else 12.dp).rotate(rot),
+                )
+            }
+            // Telephoto check: does the camera report the telephoto focal length, or is it digital zoom?
+            val lensNow = ui.lens
+            if (lensNow != null && lensNow.zoomRatio != null && effZoom >= 2.4f && ui.liveFocal > 0f) {
+                val tele = isTelephotoActive(lensNow.chars, ui.liveFocal)
+                Pill(
+                    if (tele) "TELEPHOTO LENS ✓" else "DIGITAL ZOOM · main lens",
+                    Modifier.align(Alignment.TopCenter).padding(top = if (ui.mode.video) topInset + 98.dp else 46.dp).rotate(rot),
+                    highlight = tele,
                 )
             }
             if (ui.pro && ui.liveIso > 0) {
@@ -773,4 +785,15 @@ fun formatShutter(ns: Long): String {
     return if (s >= 0.3) {
         if (s >= 1 && abs(s - Math.round(s)) < 0.05) "${Math.round(s)}s" else String.format(Locale.US, "%.1fs", s)
     } else "1/${Math.round(1 / s)}"
+}
+
+
+/** True when the reported focal length is clearly longer than the main lens' focal length. */
+private fun isTelephotoActive(ch: CameraCharacteristics, liveFocal: Float): Boolean {
+    val focals = ch.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS) ?: return false
+    if (focals.isEmpty()) return false
+    val phys = ch.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+    val diag = if (phys != null) hypot(phys.width, phys.height) else 7f
+    val mainFocal = focals.minBy { abs(it * 43.27f / diag - 26f) }
+    return liveFocal > mainFocal * 1.6f
 }

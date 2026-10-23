@@ -1,6 +1,22 @@
 package io.github.purecam.ui
 
+import android.content.Intent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -32,6 +48,8 @@ import io.github.purecam.camera.VideoProfile
 @Composable
 fun SettingsSheet(engine: CameraEngine, onDismiss: () -> Unit) {
     val ui = engine.ui
+    var showReport by remember { mutableStateOf(false) }
+    if (showReport) DiagnosticsDialog(engine) { showReport = false }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -92,6 +110,17 @@ fun SettingsSheet(engine: CameraEngine, onDismiss: () -> Unit) {
                 )
             }
             ui.activeSensor?.let { Note("Sensor in use right now: camera ID $it") }
+            ListItem(
+                modifier = Modifier.clickable { showReport = true },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                headlineContent = { Text("Camera diagnostics", color = Amber) },
+                supportingContent = {
+                    Text(
+                        "Lists every camera the phone reveals to apps. Copy or share it to help add a missing lens.",
+                        color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
+                    )
+                },
+            )
             Note("Photos and videos are saved in Gallery › DCIM › PureCam.")
         }
     }
@@ -139,4 +168,35 @@ private fun Choice(title: String, subtitle: String, selected: Boolean, enabled: 
         headlineContent = { Text(title, color = Color.White.copy(alpha = if (enabled) 1f else 0.4f)) },
         supportingContent = { Text(subtitle, color = Color.White.copy(alpha = if (enabled) 0.6f else 0.3f), fontSize = 13.sp) },
     )
+}
+
+
+@Composable
+private fun DiagnosticsDialog(engine: CameraEngine, onDismiss: () -> Unit) {
+    val report = remember { engine.diagnostics() }
+    val clipboard = LocalClipboardManager.current
+    val ctx = LocalContext.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = Color(0xFF101215)) {
+            Column(Modifier.fillMaxSize().systemBarsPadding().padding(12.dp)) {
+                Row {
+                    Text("Camera report", Modifier.weight(1f).padding(top = 12.dp), color = Color.White, fontWeight = FontWeight.Bold)
+                    TextButton(onClick = {
+                        clipboard.setText(AnnotatedString(report))
+                        engine.toast("Report copied")
+                    }) { Text("Copy", color = Amber) }
+                    TextButton(onClick = {
+                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, report)
+                        ctx.startActivity(Intent.createChooser(send, "Share camera report"))
+                    }) { Text("Share", color = Amber) }
+                    TextButton(onClick = onDismiss) { Text("Close", color = Color.White) }
+                }
+                Text(
+                    report,
+                    Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                    color = Color.White.copy(alpha = 0.85f), fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 14.sp,
+                )
+            }
+        }
+    }
 }
