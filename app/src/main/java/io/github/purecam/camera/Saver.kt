@@ -54,6 +54,20 @@ object Saver {
         ctx.contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
     }
 
+    /** Empty, visible entry another camera app can write into (via EXTRA_OUTPUT). */
+    fun createEntry(ctx: Context, name: String, video: Boolean): Uri {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, if (video) "$name.mp4" else "$name.jpg")
+            put(MediaStore.MediaColumns.MIME_TYPE, if (video) "video/mp4" else "image/jpeg")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, DIR)
+        }
+        val col = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        return ctx.contentResolver.insert(col, values) ?: error("Could not create the file")
+    }
+
+    fun sizeOf(ctx: Context, uri: Uri): Long =
+        runCatching { ctx.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L }.getOrDefault(0L)
+
     fun discard(ctx: Context, uri: Uri) {
         runCatching { ctx.contentResolver.delete(uri, null, null) }
     }

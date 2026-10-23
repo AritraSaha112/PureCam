@@ -183,6 +183,31 @@ fun CameraScreen(engine: CameraEngine) {
         engine.setMode(m)
     }
 
+    // ---- true 3× shots through Samsung's camera (the telephoto is reserved for it)
+    var externalUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var externalVideo by remember { mutableStateOf(false) }
+    val externalLauncher = rememberLauncherForActivityResult(ExternalCapture()) { ok ->
+        externalUri?.let { engine.onExternalCapture(it, ok, externalVideo) }
+        externalUri = null
+    }
+    fun shootWithTelephoto() {
+        val video = ui.mode.video
+        val uri = engine.createExternalTarget(video) ?: return
+        externalUri = uri
+        externalVideo = video
+        try {
+            externalLauncher.launch(ExternalRequest(uri, video, samsung = true))
+        } catch (e: android.content.ActivityNotFoundException) {
+            try {
+                externalLauncher.launch(ExternalRequest(uri, video, samsung = false))
+            } catch (e2: android.content.ActivityNotFoundException) {
+                engine.onExternalCapture(uri, false, video)
+                externalUri = null
+                engine.toast("No camera app found for the telephoto shot")
+            }
+        }
+    }
+
     // ---- microphone permission the first time Video is opened
     val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(ui.mode) {
@@ -259,11 +284,21 @@ fun CameraScreen(engine: CameraEngine) {
             val lensNow = ui.lens
             if (lensNow != null && lensNow.zoomRatio != null && effZoom >= 2.4f && ui.liveFocal > 0f) {
                 val tele = isTelephotoActive(lensNow.chars, ui.liveFocal)
-                Pill(
-                    if (tele) "TELEPHOTO LENS ✓" else "DIGITAL ZOOM · main lens",
-                    Modifier.align(Alignment.TopCenter).padding(top = if (ui.mode.video) topInset + 98.dp else 46.dp).rotate(rot),
-                    highlight = tele,
-                )
+                val pillMod = Modifier.align(Alignment.TopCenter).padding(top = if (ui.mode.video) topInset + 98.dp else 46.dp)
+                if (tele) {
+                    Pill("TELEPHOTO LENS ✓", pillMod.rotate(rot), highlight = true)
+                } else if (!ui.recording) {
+                    // Samsung reserves the telephoto for its own camera: offer a one-tap handoff for a true 3× shot.
+                    Text(
+                        "Digital zoom · tap for real 3× lens",
+                        pillMod
+                            .clip(RoundedCornerShape(50))
+                            .background(Amber)
+                            .clickable { shootWithTelephoto() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
             }
             if (ui.pro && ui.liveIso > 0) {
                 Pill(
@@ -796,4 +831,21 @@ private fun isTelephotoActive(ch: CameraCharacteristics, liveFocal: Float): Bool
     val diag = if (phys != null) hypot(phys.width, phys.height) else 7f
     val mainFocal = focals.minBy { abs(it * 43.27f / diag - 26f) }
     return liveFocal > mainFocal * 1.6f
+}
+
+
+private data class ExternalRequest(val uri: android.net.Uri, val video: Boolean, val samsung: Boolean)
+
+/** Opens Samsung's camera in capture mode; it writes the photo/video straight into PureCam's file. */
+private class ExternalCapture : androidx.activity.result.contract.ActivityResultContract<ExternalRequest, Boolean>() {
+    override fun createIntent(context: android.content.Context, input: ExternalRequest): Intent =
+        Intent(if (input.video) android.provider.MediaStore.ACTION_VIDEO_CAPTURE else android.provider.MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(android.provider.MediaStore.EXTRA_OUTPUT, input.uri)
+            if (input.video) putExtra(android.provider.MediaStore.EXTRA_VIDEO_QUALITY, 1)
+            clipData = android.content.ClipData.newRawUri("", input.uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (input.samsung) setPackage("com.sec.android.app.camera")
+        }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Boolean = resultCode == android.app.Activity.RESULT_OK
 }

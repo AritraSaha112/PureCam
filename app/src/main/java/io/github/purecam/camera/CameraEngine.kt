@@ -436,6 +436,23 @@ class CameraEngine(private val app: Context) {
     /** Full text report of every camera the phone exposes, for troubleshooting lens detection. */
     fun diagnostics(): String = CameraReport.build(app, ui)
 
+    /** Target file for a shot taken by Samsung's camera (the only app allowed to use the telephoto). */
+    fun createExternalTarget(video: Boolean): Uri? = runCatching {
+        Saver.createEntry(app, "PURE_TELE_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()), video)
+    }.getOrElse { toast("Couldn't create the file: ${it.message}"); null }
+
+    fun onExternalCapture(uri: Uri, ok: Boolean, video: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            if (!ok || Saver.sizeOf(app, uri) == 0L) {
+                Saver.discard(app, uri)
+                return@launch
+            }
+            val t = Saver.thumbnail(app, uri)
+            main.post { ui.lastUri = uri; ui.lastIsVideo = video; if (t != null) ui.thumb = t }
+            toast("Saved to DCIM/PureCam (shot with the 3× telephoto)")
+        }
+    }
+
     fun toast(msg: String) = main.post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
 
     // ------------------------------------------------------------------ open / close
