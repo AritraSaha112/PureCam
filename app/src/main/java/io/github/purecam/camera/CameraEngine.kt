@@ -118,6 +118,12 @@ class CamUi {
     var liveIso by mutableIntStateOf(0)
     var liveExposure by mutableLongStateOf(0L)
     var activeSensor by mutableStateOf<String?>(null)
+    /** Extra zoom PureCam applies itself when the phone ignores a zoom request (viewfinder + saved photo). */
+    var softZoom by mutableFloatStateOf(1f)
+    /** Time of the last zoom change, used to show the zoom dial. */
+    var zoomActivity by mutableLongStateOf(0L)
+    /** Bumped right before the camera reopens on its own (zooming across lenses), so the UI can blur-transition. */
+    var transitionRequest by mutableIntStateOf(0)
     /** Focal length (mm) the camera reports for the current frame: tells whether the telephoto module is really in use. */
     var liveFocal by mutableFloatStateOf(0f)
     var rotation by mutableIntStateOf(0)
@@ -308,18 +314,55 @@ class CameraEngine(private val app: Context) {
     /** Pinch zoom. On zoom-ratio lenses the zoom runs continuously across all lenses, like an iPhone. */
     fun pinch(factor: Float) {
         val l = ui.lens ?: return
+        setEffectiveZoom(l.ratio * ui.zoom * factor)
+    }
+
+    /** Zoom shown to the user, relative to the main 1× lens (0.5×, 1×, 3×, 5.4× …). */
+    fun effectiveZoom(): Float = (ui.lens?.ratio ?: 1f) * ui.zoom
+
+    /** Smallest and largest zoom reachable on the current side of the phone. */
+    fun zoomRange(): Pair<Float, Float> {
+        val cur = ui.lens ?: return 1f to 1f
+        val fam = ui.lenses.filter { it.front == cur.front }
+        if (fam.isEmpty()) return 1f to 1f
+        val lo = fam.minOf { it.ratio }
+        val hi = fam.maxOf { l -> val c = capsOf(l); if (l.zoomRatio != null) c.maxZoom else l.ratio * c.maxZoom }
+        return lo to max(hi.coerceAtMost(10f), lo)
+    }
+
+    /**
+     * Continuous zoom across every lens, like the iPhone dial: picks the right lens for [target]
+     * and the remaining digital zoom on it. Crossing to a lens on a different camera (e.g. 1× → 0.5×)
+     * reopens the camera once, with a little hysteresis so it doesn't flip back and forth.
+     */
+    fun setEffectiveZoom(target: Float) {
+        val cur = ui.lens ?: return
+        val (lo, hi) = zoomRange()
+        val eff = target.coerceIn(lo, hi)
+        val fam = ui.lenses.filter { it.front == cur.front }
+        var pick = fam.filter { it.ratio <= eff * 1.001f }.maxByOrNull { it.ratio } ?: fam.minBy { it.ratio }
         zoomJob?.cancel()
-        val zr = l.zoomRatio
-        if (zr != null) {
-            val eff = (zr * ui.zoom * factor).coerceIn(ui.caps.minZoom, ui.caps.maxZoom)
-            val siblings = ui.lenses.filter { sameCamera(it, l) }.sortedBy { it.zoomRatio }
-            val chip = siblings.lastOrNull { it.zoomRatio!! <= eff + 0.01f } ?: siblings.firstOrNull() ?: l
-            ui.lens = chip
-            ui.zoom = eff / chip.zoomRatio!!
-        } else {
-            ui.zoom = (ui.zoom * factor).coerceIn(1f, ui.caps.maxZoom)
+        ui.zoomActivity = SystemClock.uptimeMillis()
+        if (needsReopen(pick)) {
+            val curMax = if (cur.zoomRatio != null) ui.caps.maxZoom else cur.ratio * ui.caps.maxZoom
+            val stay = ui.recording ||
+                (pick.ratio > cur.ratio && eff <= curMax && eff < pick.ratio * 1.05f) ||
+                (pick.ratio < cur.ratio && eff > cur.ratio * 0.97f)
+            if (stay) pick = cur
         }
-        requestPreview()
+        if (!needsReopen(pick)) {
+            ui.lens = pick
+            ui.zoom = (eff / pick.ratio).coerceAtLeast(if (pick.zoomRatio != null) ui.caps.minZoom / pick.ratio else 1f)
+            requestPreview()
+            return
+        }
+        ui.transitionRequest++
+        ui.lens = pick
+        ui.zoom = (eff / pick.ratio).coerceAtLeast(1f)
+        ui.caps = capsOf(pick)
+        rememberLens(pick)
+        clearFocus()
+        reopen()
     }
 
     private fun animateZoom(target: Float) {
@@ -435,6 +478,39 @@ class CameraEngine(private val app: Context) {
 
     /** Full text report of every camera the phone exposes, for troubleshooting lens detection. */
     fun diagnostics(): String = CameraReport.build(app, ui)
+
+    private fun isLogical(l: Lens): Boolean =
+        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA in
+            (l.chars.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf())
+
+    private var softSamples = 0
+
+    /**
+     * Compares the crop we asked for with the crop the camera really used. If the phone ignores the
+     * request (some Samsung firmware does), PureCam zooms the viewfinder and the saved photo itself,
+     * so zoom always works.
+     */
+    private fun checkZoomApplied(r: CaptureRequest, res: TotalCaptureResult) {
+        val l = openLens ?: return
+        val active = l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+        val asked = r.get(CaptureRequest.SCALER_CROP_REGION)
+        val got = res.get(CaptureResult.SCALER_CROP_REGION)
+        var soft = 1f
+        if (asked != null && got != null && asked.width() > 0 && got.width() > 0) {
+            val wanted = active.width().toFloat() / asked.width()
+            var applied = active.width().toFloat() / got.width()
+            if (Build.VERSION.SDK_INT >= 30) res.get(CaptureResult.CONTROL_ZOOM_RATIO)?.let { applied *= it }
+            soft = (wanted / applied).coerceAtLeast(1f)
+            if (soft < 1.03f) soft = 1f
+        }
+        if (abs(soft - ui.softZoom) > 0.02f) {
+            softSamples++
+            if (softSamples >= 2 || soft == 1f) {
+                softSamples = 0
+                main.post { ui.softZoom = soft }
+            }
+        } else softSamples = 0
+    }
 
     /** Target file for a shot taken by Samsung's camera (the only app allowed to use the telephoto). */
     fun createExternalTarget(video: Boolean): Uri? = runCatching {
@@ -669,6 +745,7 @@ class CameraEngine(private val app: Context) {
                 firstFrame = false
                 main.post { ui.streamSeq++ }
             }
+            checkZoomApplied(r, res)
             res.get(CaptureResult.SENSOR_SENSITIVITY)?.let { lastIso = it }
             res.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { lastExposure = it }
             val now = SystemClock.uptimeMillis()
@@ -769,10 +846,16 @@ class CameraEngine(private val app: Context) {
         // ---- Zoom
         val z = currentZoom()
         val zr = l.zoomRatio
-        if (zr != null && Build.VERSION.SDK_INT >= 30) {
-            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, (zr * z).coerceIn(caps.minZoom, caps.maxZoom))
-        } else if (l.physicalId == null && z > 1.001f) {
-            b.set(CaptureRequest.SCALER_CROP_REGION, cropRect(l, z))
+        val total = (zr ?: 1f) * z
+        if (zr != null && isLogical(l) && Build.VERSION.SDK_INT >= 30) {
+            // A real multi-camera: the phone switches modules itself
+            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, total.coerceIn(caps.minZoom, caps.maxZoom))
+        } else if (l.physicalId == null) {
+            // Sensor crop: supported by every Android camera (Samsung ignores CONTROL_ZOOM_RATIO here)
+            if (Build.VERSION.SDK_INT >= 30 && l.chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) != null) {
+                b.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
+            }
+            b.set(CaptureRequest.SCALER_CROP_REGION, cropRect(l, total.coerceIn(1f, max(caps.maxZoom, 1f))))
         }
 
         // ---- Stabilisation: optical is mechanical and always on; electronic only for processed video
@@ -911,11 +994,12 @@ class CameraEngine(private val app: Context) {
             // Looks and Portrait blur are applied off the camera thread
             val portrait = ui.mode == Mode.PORTRAIT
             val look = ui.look
-            if (portrait || look.matrix() != null) {
+            val soft = ui.softZoom
+            if (portrait || look.matrix() != null || soft > 1.01f) {
                 main.post { ui.processing = true }
                 try {
                     val res = withContext(Dispatchers.Default) {
-                        PhotoProcessor.process(app, bytes, look, if (portrait) ui.aperture else null)
+                        PhotoProcessor.process(app, bytes, look, if (portrait) ui.aperture else null, soft)
                     }
                     bytes = res.jpeg
                     if (!res.personFound) toast("No person found, so the photo was saved without background blur")
@@ -1095,8 +1179,10 @@ class CameraEngine(private val app: Context) {
         val ev = ch.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
         var minZoom = 1f
         var maxZoom = if (l.physicalId == null) (ch.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f).coerceIn(1f, 10f) else 1f
-        if (l.zoomRatio != null && Build.VERSION.SDK_INT >= 30) {
+        if (l.zoomRatio != null && isLogical(l) && Build.VERSION.SDK_INT >= 30) {
             ch.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.let { minZoom = it.lower; maxZoom = min(it.upper, 10f) }
+        } else if (l.zoomRatio != null) {
+            maxZoom = max(maxZoom, 8f).coerceAtMost(10f)
         }
         val recSizes = map?.getOutputSizes(MediaRecorder::class.java) ?: emptyArray()
         val uhd = recSizes.contains(Size(3840, 2160))
@@ -1141,7 +1227,8 @@ class CameraEngine(private val app: Context) {
             else -> x to ny
         }
         val z = currentZoom()
-        val crop = if (l.zoomRatio == null && l.physicalId == null && z > 1.001f) cropRect(l, z)
+        val totalZ = (l.zoomRatio ?: 1f) * z
+        val crop = if (!(l.zoomRatio != null && isLogical(l)) && l.physicalId == null && totalZ > 1.001f) cropRect(l, totalZ)
         else l.chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { Rect(0, 0, it.width(), it.height()) } ?: Rect(0, 0, 1, 1)
         val half = (min(crop.width(), crop.height()) * 0.07f).roundToInt().coerceAtLeast(10)
         val cx = (crop.left + sx * crop.width()).roundToInt()

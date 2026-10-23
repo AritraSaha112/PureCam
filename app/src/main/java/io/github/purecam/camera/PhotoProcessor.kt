@@ -28,11 +28,16 @@ object PhotoProcessor {
 
     class Result(val jpeg: ByteArray, val personFound: Boolean)
 
-    suspend fun process(ctx: Context, jpeg: ByteArray, look: Look, aperture: Float?): Result {
+    suspend fun process(ctx: Context, jpeg: ByteArray, look: Look, aperture: Float?, crop: Float = 1f): Result {
         val exif = ExifInterface(ByteArrayInputStream(jpeg))
         val rotation = exif.rotationDegrees
         var bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return Result(jpeg, true)
         if (rotation != 0) bmp = swap(bmp, Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, Matrix().apply { postRotate(rotation.toFloat()) }, true))
+        if (crop > 1.01f) {
+            val cw = (bmp.width / crop).roundToInt().coerceAtLeast(1)
+            val chh = (bmp.height / crop).roundToInt().coerceAtLeast(1)
+            bmp = swap(bmp, Bitmap.createBitmap(bmp, (bmp.width - cw) / 2, (bmp.height - chh) / 2, cw, chh))
+        }
 
         var person = true
         if (aperture != null) {

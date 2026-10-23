@@ -33,6 +33,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -122,6 +123,8 @@ import androidx.core.content.ContextCompat
 import io.github.purecam.camera.CameraEngine
 import io.github.purecam.camera.Flash
 import io.github.purecam.camera.Lens
+import io.github.purecam.camera.LensCatalog
+import androidx.compose.ui.graphics.nativeCanvas
 import io.github.purecam.camera.Look
 import io.github.purecam.camera.Mode
 import io.github.purecam.camera.VideoProfile
@@ -157,6 +160,9 @@ fun CameraScreen(engine: CameraEngine) {
             snapshot = it.asImageBitmap()
             scope.launch { snapAlpha.snapTo(1f) }
         }
+    }
+    LaunchedEffect(ui.transitionRequest) {
+        if (ui.transitionRequest > 0) transition()
     }
     LaunchedEffect(ui.streamSeq) {
         if (snapshot != null) {
@@ -230,7 +236,11 @@ fun CameraScreen(engine: CameraEngine) {
                 .aspectRatio(aspect)
                 .clip(RoundedCornerShape(if (ui.mode.video) 0.dp else 4.dp)),
         ) {
-            Viewfinder(engine, if (ui.mode.video) null else ui.look) { textureView = it }
+            // If the phone ignores a zoom request, PureCam scales the viewfinder itself (and crops the saved photo)
+            val soft by animateFloatAsState(ui.softZoom, tween(120), label = "softZoom")
+            Box(Modifier.fillMaxSize().graphicsLayer { scaleX = soft; scaleY = soft }) {
+                Viewfinder(engine, if (ui.mode.video) null else ui.look) { textureView = it }
+            }
             snapshot?.let {
                 Image(
                     it, null,
@@ -362,7 +372,7 @@ fun CameraScreen(engine: CameraEngine) {
                     color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
                 )
             }
-            LensChips(engine, rot, ::pickLens)
+            ZoomControl(engine, rot, ::pickLens)
             if (ui.pro) ProChips(engine, proControl) { proControl = if (proControl == it) null else it }
             AnimatedVisibility(!ui.recording, enter = fadeIn(), exit = fadeOut()) {
                 ModeCarousel(ui.mode, ::changeMode)
@@ -848,4 +858,112 @@ private class ExternalCapture : androidx.activity.result.contract.ActivityResult
         }
 
     override fun parseResult(resultCode: Int, intent: Intent?): Boolean = resultCode == android.app.Activity.RESULT_OK
+}
+
+
+// ============================================================================ iPhone-style zoom dial
+
+/** Drag distance (dp) for each 2.718× step of zoom: the dial moves in even, logarithmic steps. */
+private const val DIAL_DP_PER_E = 95f
+
+/**
+ * Lens buttons that turn into a smooth zoom dial: drag sideways on the buttons (or pinch the
+ * viewfinder) and the dial appears; release and it folds back into the buttons. Tapping a button
+ * still jumps to that lens with an animated zoom.
+ */
+@Composable
+private fun ZoomControl(engine: CameraEngine, rot: Float, onPick: (Lens) -> Unit) {
+    val ui = engine.ui
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val pxPerE = with(density) { DIAL_DP_PER_E.dp.toPx() }
+    var dragging by remember { mutableStateOf(false) }
+    var showDial by remember { mutableStateOf(false) }
+    LaunchedEffect(ui.zoomActivity, dragging) {
+        if (dragging) {
+            showDial = true
+        } else if (ui.zoomActivity > 0 && android.os.SystemClock.uptimeMillis() - ui.zoomActivity < 1500) {
+            showDial = true
+            delay(1400)
+            showDial = false
+        } else {
+            showDial = false
+        }
+    }
+    val hasRange = engine.zoomRange().let { it.second / it.first > 1.2f }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(70.dp)
+            .pointerInput(hasRange) {
+                if (!hasRange) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { dragging = true },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                ) { change, dx ->
+                    change.consume()
+                    engine.setEffectiveZoom(engine.effectiveZoom() * kotlin.math.exp(-dx / pxPerE))
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.animation.Crossfade(showDial && hasRange, animationSpec = tween(180), label = "dial") { dial ->
+            if (dial) {
+                val (lo, hi) = engine.zoomRange()
+                ZoomDial(engine.effectiveZoom(), lo, hi, ui.lenses.filter { it.front == ui.lens?.front }.map { it.ratio }, rot)
+            } else {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { LensChips(engine, rot, onPick) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ZoomDial(zoom: Float, lo: Float, hi: Float, lensRatios: List<Float>, rot: Float) {
+    val labelPaint = remember {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        }
+    }
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            String.format(Locale.US, if (zoom < 10f) "%.1f×" else "%.0f×", zoom),
+            Modifier.rotate(rot).clip(RoundedCornerShape(50)).background(Scrim).padding(horizontal = 10.dp, vertical = 2.dp),
+            color = Amber, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+        )
+        Canvas(Modifier.fillMaxWidth().height(44.dp)) {
+            val cx = size.width / 2f
+            val pxPerE = DIAL_DP_PER_E.dp.toPx()
+            fun xOf(v: Float) = cx + (kotlin.math.ln(v) - kotlin.math.ln(zoom)) * pxPerE
+            val baseY = 6.dp.toPx()
+            labelPaint.textSize = 11.sp.toPx()
+            val majors = (lensRatios + listOf(1f, 2f, 5f, 10f)).filter { it in lo..hi }
+            var v = lo
+            while (v <= hi + 0.001f) {
+                val x = xOf(v)
+                if (x > -10f && x < size.width + 10f) {
+                    val d = (kotlin.math.abs(x - cx) / (size.width / 2f)).coerceIn(0f, 1f)
+                    val a = (1f - d * d).coerceIn(0f, 1f)
+                    val major = majors.any { kotlin.math.abs(it - v) < 0.012f * it }
+                    val len = if (major) 16.dp.toPx() else 8.dp.toPx()
+                    drawLine(Color.White.copy(alpha = a * if (major) 1f else 0.6f), Offset(x, baseY), Offset(x, baseY + len), if (major) 2.dp.toPx() else 1.dp.toPx())
+                    if (major) {
+                        labelPaint.color = android.graphics.Color.argb((a * 230).toInt(), 255, 255, 255)
+                        drawContext.canvas.nativeCanvas.drawText(LensCatalog.format(v), x, baseY + len + 13.dp.toPx(), labelPaint)
+                    }
+                }
+                v += when {
+                    v < 1f -> 0.05f
+                    v < 2f -> 0.1f
+                    v < 5f -> 0.2f
+                    else -> 0.5f
+                }
+                // snap onto lens ratios so their major ticks line up exactly
+                lensRatios.firstOrNull { it > v - 0.049f && it < v + 0.049f && kotlin.math.abs(it - v) > 0.001f && it > lo }?.let { if (it > v) v = it }
+            }
+            // centre needle
+            drawLine(Amber, Offset(cx, 0f), Offset(cx, baseY + 22.dp.toPx()), 2.5.dp.toPx())
+        }
+    }
 }
